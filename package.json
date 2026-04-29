@@ -1,0 +1,21 @@
+{
+  "name": "automated-qa-inside-every-preview-environment",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Companion code for the Autonoma blog post on running automated E2E testing inside per-PR preview environments.",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "seed:preview": "ts-node scripts/seed-preview.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0",
+    "@types/node": "^20.12.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  }
+}

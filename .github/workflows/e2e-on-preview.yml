@@ -1,0 +1,98 @@
+name: E2E on Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: e2e-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Deploy preview environment
+    runs-on: ubuntu-latest
+    outputs:
+      preview_url: ${{ steps.deploy.outputs.preview_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Trigger preview deployment
+        id: deploy
+        env:
+          PLATFORM_TOKEN: ${{ secrets.PLATFORM_TOKEN }}
+        run: |
+          # Replace this with your platform-specific deploy command.
+          # Most platforms (Vercel, Netlify, Render, Railway, fly.io) emit
+          # a preview URL on stdout or in a deployment payload. Capture it
+          # and expose it as a step output so downstream jobs can read it.
+          PREVIEW_URL="https://pr-${{ github.event.pull_request.number }}.preview.example.com"
+          echo "preview_url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
+          echo "Deployed preview to ${PREVIEW_URL}"
+
+  wait-for-preview:
+    name: Wait for preview to become healthy
+    needs: deploy-preview
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll /health until 200
+        env:
+          PREVIEW_URL: ${{ needs.deploy-preview.outputs.preview_url }}
+          PREVIEW_BYPASS_TOKEN: ${{ secrets.PREVIEW_BYPASS_TOKEN }}
+        run: |
+          set -euo pipefail
+          ATTEMPTS=0
+          MAX_ATTEMPTS=60
+          until curl -fsSL \
+              -H "x-preview-bypass-token: ${PREVIEW_BYPASS_TOKEN}" \
+              "${PREVIEW_URL}/health" > /dev/null; do
+            ATTEMPTS=$((ATTEMPTS + 1))
+            if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
+              echo "Preview did not become healthy after ${MAX_ATTEMPTS} attempts" >&2
+              exit 1
+            fi
+            echo "Waiting for ${PREVIEW_URL} (attempt ${ATTEMPTS}/${MAX_ATTEMPTS})..."
+            sleep 5
+          done
+          echo "Preview is healthy."
+
+  e2e:
+    name: Playwright E2E
+    needs: [deploy-preview, wait-for-preview]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_BASE_URL: ${{ needs.deploy-preview.outputs.preview_url }}
+      PREVIEW_URL: ${{ needs.deploy-preview.outputs.preview_url }}
+      PREVIEW_BYPASS_TOKEN: ${{ secrets.PREVIEW_BYPASS_TOKEN }}
+      SEED_API_KEY: ${{ secrets.SEED_API_KEY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Seed preview database
+        run: npx ts-node scripts/seed-preview.ts
+
+      - name: Run Playwright tests
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.event.pull_request.number }}
+          path: playwright-report/
+          retention-days: 14
